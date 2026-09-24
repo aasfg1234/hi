@@ -1,0 +1,623 @@
+<title>防手掌寫字板</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<style>
+  :root {
+    --paper: #f3f5f8;
+    --grid: #dde3ec;
+    --ink: #1d2a44;
+    --panel: #ffffff;
+    --line: #c9d1dd;
+    --muted: #5b6679;
+    --accent: #2f6fdb;
+    --accent-ink: #ffffff;
+    --guard: rgba(47, 111, 219, 0.10);
+    --guard-edge: rgba(47, 111, 219, 0.55);
+    --warn: #b4232a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --paper: #161b24;
+      --grid: #232b38;
+      --ink: #e6ecf5;
+      --panel: #1d2330;
+      --line: #2e3748;
+      --muted: #97a3b8;
+      --accent: #6ea0ff;
+      --accent-ink: #0d1422;
+      --guard: rgba(110, 160, 255, 0.12);
+      --guard-edge: rgba(110, 160, 255, 0.6);
+      --warn: #ff7b7b;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --paper: #161b24;
+    --grid: #232b38;
+    --ink: #e6ecf5;
+    --panel: #1d2330;
+    --line: #2e3748;
+    --muted: #97a3b8;
+    --accent: #6ea0ff;
+    --accent-ink: #0d1422;
+    --guard: rgba(110, 160, 255, 0.12);
+    --guard-edge: rgba(110, 160, 255, 0.6);
+    --warn: #ff7b7b;
+  }
+
+  html, body { height: 100%; }
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: system-ui, -apple-system, "Noto Sans TC", "PingFang TC", sans-serif;
+    overflow: hidden;
+    overscroll-behavior: none;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+  }
+  .app { display: flex; flex-direction: column; height: 100%; }
+
+  .bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 16px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--line);
+  }
+  .group { display: flex; align-items: center; gap: 6px; }
+  .sep { width: 1px; align-self: stretch; background: var(--line); }
+  .spacer { flex: 1; }
+
+  button {
+    font: inherit;
+    font-size: 15px;
+    min-height: 40px;
+    padding: 0 14px;
+    border-radius: 8px;
+    border: 1px solid var(--line);
+    background: var(--panel);
+    color: var(--ink);
+    cursor: pointer;
+  }
+  button[aria-pressed="true"] {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--accent-ink);
+  }
+  button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  button.warn { color: var(--warn); }
+
+  .swatch {
+    width: 36px; min-width: 36px; padding: 0;
+    display: grid; place-items: center;
+  }
+  .swatch span { width: 20px; height: 20px; border-radius: 50%; display: block; }
+  .swatch[aria-pressed="true"] { background: var(--panel); border: 2px solid var(--accent); }
+
+  .size-label { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+  .board { position: relative; flex: 1; overflow: hidden; }
+  canvas { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; display: block; }
+
+  .guard {
+    position: absolute; left: 0; right: 0; bottom: 0;
+    background: var(--guard);
+    border-top: 2px dashed var(--guard-edge);
+    pointer-events: none;
+  }
+  .guard-handle {
+    position: absolute; left: 50%; top: -22px; transform: translateX(-50%);
+    padding: 6px 14px;
+    font-size: 13px;
+    border-radius: 999px;
+    background: var(--panel);
+    color: var(--muted);
+    border: 1px solid var(--guard-edge);
+    pointer-events: auto;
+    touch-action: none;
+    white-space: nowrap;
+  }
+  .guard-text {
+    position: absolute; right: 16px; bottom: 12px;
+    font-size: 13px; color: var(--muted);
+  }
+
+  .status {
+    position: absolute; left: 16px; top: 10px;
+    font-size: 12px; color: var(--muted);
+    font-variant-numeric: tabular-nums;
+    pointer-events: none;
+  }
+
+  .panel {
+    position: absolute; right: 16px; top: 12px;
+    width: min(360px, calc(100% - 32px));
+    max-height: calc(100% - 24px);
+    overflow-y: auto;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 16px;
+    display: flex; flex-direction: column; gap: 16px;
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
+  }
+  .panel h2 { margin: 0; font-size: 16px; }
+  .field { display: flex; flex-direction: column; gap: 8px; }
+  .field label, .field .name { font-size: 14px; font-weight: 600; }
+  .field p { margin: 0; font-size: 13px; color: var(--muted); line-height: 1.5; }
+  .row { display: flex; gap: 6px; flex-wrap: wrap; }
+  input[type="range"] { width: 100%; accent-color: var(--accent); }
+</style>
+
+<div class="app">
+  <div class="bar">
+    <div class="group" role="group" aria-label="工具">
+      <button id="tool-pen" aria-pressed="true">筆</button>
+      <button id="tool-eraser" aria-pressed="false">橡皮擦</button>
+    </div>
+    <div class="sep"></div>
+    <div class="group" role="group" aria-label="顏色" id="colors"></div>
+    <div class="sep"></div>
+    <div class="group">
+      <button id="thin">細</button>
+      <span class="size-label" id="size-label">3</span>
+      <button id="thick">粗</button>
+    </div>
+    <div class="spacer"></div>
+    <div class="group">
+      <button id="undo">上一步</button>
+      <button id="clear" class="warn">清空</button>
+      <button id="settings-btn" aria-pressed="false">防手掌設定</button>
+    </div>
+  </div>
+
+  <div class="board" id="board">
+    <canvas id="pad"></canvas>
+    <div class="status" id="status">等你下筆</div>
+
+    <div class="guard" id="guard">
+      <div class="guard-handle" id="guard-handle">拖我調整手掌區</div>
+      <div class="guard-text">手放這裡，不會畫到</div>
+    </div>
+
+    <div class="panel" id="panel" hidden>
+      <h2>防手掌設定</h2>
+
+      <div class="field">
+        <span class="name">你用哪隻手寫字？</span>
+        <div class="row">
+          <button id="hand-right" aria-pressed="true">右手</button>
+          <button id="hand-left" aria-pressed="false">左手</button>
+        </div>
+        <p>同時碰到兩個點時，靠近筆尖方向的那個當筆，另一個當手掌丟掉。</p>
+      </div>
+
+      <div class="field">
+        <span class="name">手掌區</span>
+        <div class="row">
+          <button id="guard-on" aria-pressed="true">開</button>
+          <button id="guard-off" aria-pressed="false">關</button>
+        </div>
+        <p>畫面下方的藍色區塊。手放在上面不會畫出線。拖把手可以調高低。</p>
+      </div>
+
+      <div class="field">
+        <label for="size-limit">接觸面積上限：<span id="size-limit-val">28</span> px</label>
+        <input type="range" id="size-limit" min="8" max="80" step="1" value="28">
+        <p>碰到的面積比這個大，就當成手掌。左上角會顯示「上次接觸大小」。先用筆點幾下，再把上限調到比筆大一點。</p>
+      </div>
+
+      <div class="field">
+        <span class="name">只收主動筆</span>
+        <div class="row">
+          <button id="pen-only-auto" aria-pressed="true">自動</button>
+          <button id="pen-only-off" aria-pressed="false">關</button>
+        </div>
+        <p>如果你的筆會被認成「筆」，偵測到之後就不理手指。一般電容筆會被當成手指，這個設定對它沒用。</p>
+      </div>
+
+      <button id="close-panel">關閉設定</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  var canvas = document.getElementById("pad");
+  var ctx = canvas.getContext("2d");
+  var board = document.getElementById("board");
+  var guardEl = document.getElementById("guard");
+  var guardHandle = document.getElementById("guard-handle");
+  var statusEl = document.getElementById("status");
+  var panel = document.getElementById("panel");
+
+  var COLORS = [
+    { key: "ink", label: "黑", css: null },
+    { key: "red", label: "紅", css: "#d64545" },
+    { key: "blue", label: "藍", css: "#2f6fdb" },
+    { key: "green", label: "綠", css: "#2e9e6a" }
+  ];
+  var SIZES = [1.5, 2, 3, 4, 6, 9, 13];
+
+  var settings = {
+    hand: "right",
+    guardOn: true,
+    guardRatio: 0.3,
+    sizeLimit: 28,
+    penOnly: "auto"
+  };
+  var tool = "pen";
+  var colorKey = "ink";
+  var sizeIndex = 2;
+
+  var strokes = [];
+  var history = [];
+  var active = null;       // { id, stroke }
+  var palmIds = {};        // pointerId -> true
+  var penSeen = false;
+  var guardDrag = null;
+
+  // ---------- storage ----------
+  function load() {
+    try {
+      var s = JSON.parse(localStorage.getItem("stylus-pad-settings") || "null");
+      if (s) Object.assign(settings, s);
+      var d = JSON.parse(localStorage.getItem("stylus-pad-strokes") || "null");
+      if (Array.isArray(d)) strokes = d;
+    } catch (e) {}
+  }
+  function saveSettings() {
+    try { localStorage.setItem("stylus-pad-settings", JSON.stringify(settings)); } catch (e) {}
+  }
+  function saveStrokes() {
+    try { localStorage.setItem("stylus-pad-strokes", JSON.stringify(strokes)); } catch (e) {}
+  }
+
+  // ---------- drawing ----------
+  var dpr = 1, W = 0, H = 0;
+  function resize() {
+    var r = board.getBoundingClientRect();
+    dpr = window.devicePixelRatio || 1;
+    W = r.width; H = r.height;
+    canvas.width = Math.round(W * dpr);
+    canvas.height = Math.round(H * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    layoutGuard();
+    redraw();
+  }
+
+  function cssVar(name) {
+    return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  }
+  function strokeColor(key) {
+    if (key === "ink") return cssVar("--ink");
+    for (var i = 0; i < COLORS.length; i++) if (COLORS[i].key === key) return COLORS[i].css;
+    return cssVar("--ink");
+  }
+
+  function drawGrid() {
+    ctx.fillStyle = cssVar("--paper");
+    ctx.fillRect(0, 0, W, H);
+    ctx.strokeStyle = cssVar("--grid");
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (var y = 40; y < H; y += 40) { ctx.moveTo(0, y + 0.5); ctx.lineTo(W, y + 0.5); }
+    ctx.stroke();
+  }
+
+  function segWidth(stroke, p) {
+    return stroke.size * (stroke.pressure ? (0.35 + p.p * 1.3) : 1);
+  }
+  function drawSegment(stroke, a, b) {
+    ctx.strokeStyle = strokeColor(stroke.color);
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.lineWidth = (segWidth(stroke, a) + segWidth(stroke, b)) / 2;
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
+    ctx.stroke();
+  }
+  function drawStroke(stroke) {
+    var pts = stroke.points;
+    if (pts.length === 1) {
+      ctx.fillStyle = strokeColor(stroke.color);
+      ctx.beginPath();
+      ctx.arc(pts[0].x, pts[0].y, segWidth(stroke, pts[0]) / 2, 0, Math.PI * 2);
+      ctx.fill();
+      return;
+    }
+    for (var i = 1; i < pts.length; i++) drawSegment(stroke, pts[i - 1], pts[i]);
+  }
+  function redraw() {
+    drawGrid();
+    for (var i = 0; i < strokes.length; i++) drawStroke(strokes[i]);
+    if (active && active.stroke && strokes.indexOf(active.stroke) < 0) drawStroke(active.stroke);
+  }
+
+  // ---------- palm guard ----------
+  function guardTop() { return H * (1 - settings.guardRatio); }
+  function layoutGuard() {
+    guardEl.hidden = !settings.guardOn;
+    guardEl.style.height = (settings.guardRatio * 100) + "%";
+  }
+  function inGuard(y) { return settings.guardOn && y >= guardTop(); }
+
+  guardHandle.addEventListener("pointerdown", function (e) {
+    e.preventDefault();
+    e.stopPropagation();
+    guardDrag = e.pointerId;
+    guardHandle.setPointerCapture(e.pointerId);
+  });
+  guardHandle.addEventListener("pointermove", function (e) {
+    if (guardDrag !== e.pointerId) return;
+    var r = board.getBoundingClientRect();
+    var y = e.clientY - r.top;
+    var ratio = 1 - y / r.height;
+    settings.guardRatio = Math.max(0.08, Math.min(0.7, ratio));
+    layoutGuard();
+  });
+  function endGuardDrag(e) {
+    if (guardDrag !== e.pointerId) return;
+    guardDrag = null;
+    saveSettings();
+  }
+  guardHandle.addEventListener("pointerup", endGuardDrag);
+  guardHandle.addEventListener("pointercancel", endGuardDrag);
+
+  // ---------- palm rejection ----------
+  function contactSize(e) {
+    return Math.max(e.width || 0, e.height || 0);
+  }
+  function tooBig(e) {
+    return e.pointerType === "touch" && contactSize(e) > settings.sizeLimit;
+  }
+  // 越小越像筆：右手寫字時，筆在手掌的左上方
+  function penScore(x, y) {
+    return settings.hand === "right" ? x + y : -x + y;
+  }
+  function pointFrom(e) {
+    var r = canvas.getBoundingClientRect();
+    var p = e.pointerType === "pen" && e.pressure > 0 ? e.pressure : 0.5;
+    return { x: e.clientX - r.left, y: e.clientY - r.top, p: p };
+  }
+  function showStatus(e, note) {
+    var size = contactSize(e);
+    var kind = e.pointerType === "pen" ? "筆" : e.pointerType === "mouse" ? "滑鼠" : "觸控";
+    statusEl.textContent = "上次接觸：" + kind + "，大小 " + size.toFixed(0) + " px" + (note ? "（" + note + "）" : "");
+  }
+
+  function dropActiveAsPalm() {
+    if (!active) return;
+    // 回到這一筆開始前的樣子（橡皮擦被手掌碰到也會復原）
+    if (history.length) strokes = history.pop();
+    palmIds[active.id] = true;
+    active = null;
+    redraw();
+  }
+
+  function shouldIgnore(e, pt) {
+    if (e.pointerType === "pen") { penSeen = true; return null; }
+    if (e.pointerType === "mouse") return null;
+    if (settings.penOnly === "auto" && penSeen) return "只收筆";
+    if (tooBig(e)) return "面積太大，當手掌";
+    if (inGuard(pt.y)) return "在手掌區";
+    return null;
+  }
+
+  function pushHistory() {
+    history.push(strokes.slice());
+    if (history.length > 100) history.shift();
+  }
+
+  function eraseAt(pt) {
+    var r = 12;
+    var before = strokes.length;
+    strokes = strokes.filter(function (s) {
+      for (var i = 0; i < s.points.length; i++) {
+        var dx = s.points[i].x - pt.x, dy = s.points[i].y - pt.y;
+        if (dx * dx + dy * dy < r * r) return false;
+      }
+      return true;
+    });
+    if (strokes.length !== before) redraw();
+  }
+
+  canvas.addEventListener("pointerdown", function (e) {
+    e.preventDefault();
+    if (!panel.hidden) { closePanel(); return; }
+    var pt = pointFrom(e);
+    var reason = shouldIgnore(e, pt);
+    showStatus(e, reason);
+    if (reason) { palmIds[e.pointerId] = true; return; }
+
+    if (active) {
+      // 已經有一筆在畫：比較誰比較像筆
+      var first = active.stroke.points[0];
+      if (penScore(pt.x, pt.y) < penScore(first.x, first.y) && e.pointerType === "touch") {
+        dropActiveAsPalm();
+        showStatus(e, "前一個點是手掌，已刪掉");
+      } else {
+        palmIds[e.pointerId] = true;
+        return;
+      }
+    }
+
+    try { canvas.setPointerCapture(e.pointerId); } catch (err) {}
+    pushHistory();
+    if (tool === "eraser") {
+      active = { id: e.pointerId, stroke: { points: [pt] }, erasing: true };
+      eraseAt(pt);
+      return;
+    }
+    var stroke = {
+      color: colorKey,
+      size: SIZES[sizeIndex],
+      pressure: e.pointerType === "pen",
+      points: [pt]
+    };
+    strokes.push(stroke);
+    active = { id: e.pointerId, stroke: stroke };
+    drawStroke(stroke);
+  });
+
+  canvas.addEventListener("pointermove", function (e) {
+    if (!active || active.id !== e.pointerId) return;
+    e.preventDefault();
+    if (tooBig(e)) {
+      showStatus(e, "面積變大，這筆當手掌刪掉");
+      dropActiveAsPalm();
+      return;
+    }
+    var events = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
+    if (!events.length) events = [e];
+    for (var i = 0; i < events.length; i++) {
+      var pt = pointFrom(events[i]);
+      if (active.erasing) { eraseAt(pt); continue; }
+      var pts = active.stroke.points;
+      var last = pts[pts.length - 1];
+      if (Math.abs(pt.x - last.x) + Math.abs(pt.y - last.y) < 0.8) continue;
+      pts.push(pt);
+      drawSegment(active.stroke, last, pt);
+    }
+  });
+
+  function endPointer(e) {
+    delete palmIds[e.pointerId];
+    if (!active || active.id !== e.pointerId) return;
+    active = null;
+    saveStrokes();
+  }
+  canvas.addEventListener("pointerup", endPointer);
+  canvas.addEventListener("pointercancel", endPointer);
+  canvas.addEventListener("contextmenu", function (e) { e.preventDefault(); });
+  // 擋掉瀏覽器自己的捲動和縮放
+  board.addEventListener("touchstart", function (e) {
+    if (e.target === canvas) e.preventDefault();
+  }, { passive: false });
+  board.addEventListener("touchmove", function (e) { e.preventDefault(); }, { passive: false });
+
+  // ---------- toolbar ----------
+  function setPressed(ids, onId) {
+    ids.forEach(function (id) {
+      document.getElementById(id).setAttribute("aria-pressed", id === onId ? "true" : "false");
+    });
+  }
+
+  var colorsEl = document.getElementById("colors");
+  COLORS.forEach(function (c) {
+    var b = document.createElement("button");
+    b.className = "swatch";
+    b.id = "color-" + c.key;
+    b.setAttribute("aria-label", c.label);
+    b.setAttribute("aria-pressed", c.key === colorKey ? "true" : "false");
+    var dot = document.createElement("span");
+    dot.style.background = c.css || "var(--ink)";
+    b.appendChild(dot);
+    b.addEventListener("click", function () {
+      colorKey = c.key;
+      tool = "pen";
+      setPressed(["tool-pen", "tool-eraser"], "tool-pen");
+      setPressed(COLORS.map(function (x) { return "color-" + x.key; }), b.id);
+    });
+    colorsEl.appendChild(b);
+  });
+
+  document.getElementById("tool-pen").addEventListener("click", function () {
+    tool = "pen"; setPressed(["tool-pen", "tool-eraser"], "tool-pen");
+  });
+  document.getElementById("tool-eraser").addEventListener("click", function () {
+    tool = "eraser"; setPressed(["tool-pen", "tool-eraser"], "tool-eraser");
+  });
+
+  var sizeLabel = document.getElementById("size-label");
+  function showSize() { sizeLabel.textContent = SIZES[sizeIndex]; }
+  document.getElementById("thin").addEventListener("click", function () {
+    sizeIndex = Math.max(0, sizeIndex - 1); showSize();
+  });
+  document.getElementById("thick").addEventListener("click", function () {
+    sizeIndex = Math.min(SIZES.length - 1, sizeIndex + 1); showSize();
+  });
+
+  document.getElementById("undo").addEventListener("click", function () {
+    if (!history.length) return;
+    strokes = history.pop();
+    redraw(); saveStrokes();
+  });
+
+  var clearBtn = document.getElementById("clear");
+  var clearTimer = null;
+  clearBtn.addEventListener("click", function () {
+    if (clearBtn.dataset.armed !== "1") {
+      clearBtn.dataset.armed = "1";
+      clearBtn.textContent = "再按一次清空";
+      clearTimer = setTimeout(function () {
+        clearBtn.dataset.armed = "";
+        clearBtn.textContent = "清空";
+      }, 2500);
+      return;
+    }
+    clearTimeout(clearTimer);
+    clearBtn.dataset.armed = "";
+    clearBtn.textContent = "清空";
+    pushHistory();
+    strokes = [];
+    redraw(); saveStrokes();
+  });
+
+  // ---------- settings panel ----------
+  var settingsBtn = document.getElementById("settings-btn");
+  function openPanel() { panel.hidden = false; settingsBtn.setAttribute("aria-pressed", "true"); }
+  function closePanel() { panel.hidden = true; settingsBtn.setAttribute("aria-pressed", "false"); }
+  settingsBtn.addEventListener("click", function () { panel.hidden ? openPanel() : closePanel(); });
+  document.getElementById("close-panel").addEventListener("click", closePanel);
+
+  function syncSettingsUI() {
+    setPressed(["hand-right", "hand-left"], settings.hand === "right" ? "hand-right" : "hand-left");
+    setPressed(["guard-on", "guard-off"], settings.guardOn ? "guard-on" : "guard-off");
+    setPressed(["pen-only-auto", "pen-only-off"], settings.penOnly === "auto" ? "pen-only-auto" : "pen-only-off");
+    document.getElementById("size-limit").value = settings.sizeLimit;
+    document.getElementById("size-limit-val").textContent = settings.sizeLimit;
+    layoutGuard();
+  }
+  function bind(id, fn) {
+    document.getElementById(id).addEventListener("click", function () { fn(); saveSettings(); syncSettingsUI(); });
+  }
+  bind("hand-right", function () { settings.hand = "right"; });
+  bind("hand-left", function () { settings.hand = "left"; });
+  bind("guard-on", function () { settings.guardOn = true; });
+  bind("guard-off", function () { settings.guardOn = false; });
+  bind("pen-only-auto", function () { settings.penOnly = "auto"; });
+  bind("pen-only-off", function () { settings.penOnly = "off"; penSeen = false; });
+  document.getElementById("size-limit").addEventListener("input", function (e) {
+    settings.sizeLimit = Number(e.target.value);
+    document.getElementById("size-limit-val").textContent = settings.sizeLimit;
+    saveSettings();
+  });
+
+  // 主題切換時重畫，讓黑色筆跡跟著變色
+  new MutationObserver(redraw).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+  if (window.matchMedia) {
+    var mq = window.matchMedia("(prefers-color-scheme: dark)");
+    if (mq.addEventListener) mq.addEventListener("change", redraw);
+  }
+
+  load();
+  if (!strokes.length) {
+    // 範例筆跡，讓第一次打開的人知道這是寫字的地方
+    strokes = [{ color: "blue", size: 3, pressure: false, points: [
+      { x: 40, y: 70, p: .5 }, { x: 60, y: 60, p: .5 }, { x: 80, y: 72, p: .5 }, { x: 100, y: 60, p: .5 },
+      { x: 120, y: 72, p: .5 }, { x: 140, y: 60, p: .5 }, { x: 160, y: 72, p: .5 }
+    ] }];
+  }
+  showSize();
+  syncSettingsUI();
+  window.addEventListener("resize", resize);
+  resize();
+})();
+</script>
