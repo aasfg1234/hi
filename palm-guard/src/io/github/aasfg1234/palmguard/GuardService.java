@@ -38,6 +38,9 @@ public final class GuardService extends Service implements GuardView.Listener {
     private WindowManager wm;
     private GuardView view;
     private WindowManager.LayoutParams lp;
+    // 浮動擋板左上角的位置，用小數存，拖很慢也不會因為四捨五入走不動
+    private float posX;
+    private float posY;
 
     @Override
     public IBinder onBind(Intent intent) {
@@ -118,12 +121,8 @@ public final class GuardService extends Service implements GuardView.Listener {
     @Override
     public void onConfigurationChanged(Configuration newConfig) {
         super.onConfigurationChanged(newConfig);
-        // 轉向以後，照原本的比例重算擋板高度
-        if (view != null) {
-            lp.height = targetHeight();
-            wm.updateViewLayout(view, lp);
-            view.invalidate();
-        }
+        // 轉向以後，照原本的比例重算擋板大小和位置
+        if (view != null) applyLayout();
     }
 
     // ---------- 擋板 ----------
@@ -131,18 +130,21 @@ public final class GuardService extends Service implements GuardView.Listener {
     private void showGuard() {
         if (view == null) {
             view = new GuardView(windowContext, this);
-            view.setState(Prefs.rightHanded(this), Prefs.locked(this));
             lp = new WindowManager.LayoutParams(
                     WindowManager.LayoutParams.MATCH_PARENT,
-                    targetHeight(),
+                    WindowManager.LayoutParams.WRAP_CONTENT,
                     WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
                     // NOT_TOUCH_MODAL + SPLIT_TOUCH：擋板外面的觸控照常給下面的 App
+                    // LAYOUT_IN_SCREEN + NO_LIMITS：浮動擋板可以放到螢幕邊邊，一部分超出去也行
                     WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
                             | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
-                            | WindowManager.LayoutParams.FLAG_SPLIT_TOUCH,
+                            | WindowManager.LayoutParams.FLAG_SPLIT_TOUCH
+                            | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+                            | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
                     PixelFormat.TRANSLUCENT);
-            lp.gravity = Gravity.BOTTOM | Gravity.START;
             lp.setTitle("PalmGuard");
+            computeLayout();
+            view.setState(Prefs.shape(this), Prefs.rightHanded(this), Prefs.locked(this));
             try {
                 wm.addView(view, lp);
             } catch (RuntimeException e) {
@@ -167,7 +169,58 @@ public final class GuardService extends Service implements GuardView.Listener {
     }
 
     private void refreshGuard() {
-        if (view != null) view.setState(Prefs.rightHanded(this), Prefs.locked(this));
+        if (view == null) return;
+        view.setState(Prefs.shape(this), Prefs.rightHanded(this), Prefs.locked(this));
+        applyLayout();
+    }
+
+    /** 照設定算出擋板的大小和位置，放進 lp。 */
+    private void computeLayout() {
+        if (Prefs.floating(this)) {
+            float dp = getResources().getDisplayMetrics().density;
+            int w = Math.round(Prefs.widthDp(this) * dp);
+            int h = Prefs.SHAPE_CIRCLE.equals(Prefs.shape(this))
+                    ? w : Math.round(Prefs.heightDp(this) * dp);
+            lp.width = w;
+            lp.height = h;
+            lp.gravity = Gravity.TOP | Gravity.START;
+            posX = Prefs.centerX(this) * screenWidth() - w / 2f;
+            posY = Prefs.centerY(this) * screenHeight() - h / 2f;
+            clampPosition();
+        } else {
+            lp.width = WindowManager.LayoutParams.MATCH_PARENT;
+            lp.height = targetHeight();
+            lp.gravity = Gravity.BOTTOM | Gravity.START;
+            lp.x = 0;
+            lp.y = 0;
+        }
+    }
+
+    private void applyLayout() {
+        computeLayout();
+        try {
+            wm.updateViewLayout(view, lp);
+        } catch (RuntimeException ignored) {
+            // 視窗已經不在了
+        }
+        view.invalidate();
+    }
+
+    /** 浮動擋板至少要留一半在螢幕裡，不然會找不回來。 */
+    private void clampPosition() {
+        float halfW = lp.width / 2f;
+        float halfH = lp.height / 2f;
+        posX = Math.max(-halfW, Math.min(screenWidth() - halfW, posX));
+        posY = Math.max(-halfH, Math.min(screenHeight() - halfH, posY));
+        lp.x = Math.round(posX);
+        lp.y = Math.round(posY);
+    }
+
+    private int screenWidth() {
+        if (Build.VERSION.SDK_INT >= 30) {
+            return wm.getCurrentWindowMetrics().getBounds().width();
+        }
+        return getResources().getDisplayMetrics().widthPixels;
     }
 
     private int screenHeight() {
@@ -203,10 +256,30 @@ public final class GuardService extends Service implements GuardView.Listener {
         Prefs.setRatio(this, lp.height / (float) screenHeight());
     }
 
+    @Override
+    public void onMove(float dx, float dy) {
+        if (view == null) return;
+        posX += dx;
+        posY += dy;
+        int oldX = lp.x;
+        int oldY = lp.y;
+        clampPosition();
+        if (lp.x != oldX || lp.y != oldY) wm.updateViewLayout(view, lp);
+    }
+
+    @Override
+    public void onMoveEnd() {
+        if (view == null) return;
+        Prefs.setCenter(this,
+                (posX + lp.width / 2f) / screenWidth(),
+                (posY + lp.height / 2f) / screenHeight());
+    }
+
     // ---------- 通知 ----------
 
     private Notification buildNotification() {
         boolean locked = Prefs.locked(this);
+        boolean floating = Prefs.floating(this);
         Notification.Builder b = new Notification.Builder(this, CHANNEL)
                 .setSmallIcon(R.drawable.ic_notify)
                 .setContentTitle(visible ? "手掌擋板開著" : "手掌擋板暫時藏起來")
@@ -217,7 +290,9 @@ public final class GuardService extends Service implements GuardView.Listener {
                 .setShowWhen(false)
                 .setContentIntent(openAppIntent())
                 .addAction(action(visible ? "隱藏" : "顯示", ACTION_TOGGLE_VISIBLE, 1))
-                .addAction(action(locked ? "解鎖把手" : "鎖定把手", ACTION_TOGGLE_LOCK, 2))
+                .addAction(action(floating
+                        ? (locked ? "解鎖位置" : "鎖定位置")
+                        : (locked ? "解鎖把手" : "鎖定把手"), ACTION_TOGGLE_LOCK, 2))
                 .addAction(action("關閉", ACTION_STOP, 3));
         if (Build.VERSION.SDK_INT >= 31) {
             b.setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE);
