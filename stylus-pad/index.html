@@ -388,11 +388,48 @@
   function tooBig(e) {
     return e.pointerType === "touch" && contactSize(e) > settings.sizeLimit;
   }
-  // 手掌放著幾乎不動；筆會一直動。現在這筆如果沒在動，就可能是手掌
-  var STILL_PX = 12;
-  var STILL_MS = 250;
-  function activeIsStill(now) {
-    return active.moved < STILL_PX || now - active.lastMove > STILL_MS;
+  // 同時有兩個點時先不畫新的點，看接下來誰動得多：動得多的是筆，另一個是手掌
+  var DECIDE_PX = 20;     // 任一點移動超過這段距離就決定
+  var DECIDE_MS = 150;    // 最多等這麼久
+  var STILL_PX = 6;       // 時間到還分不出來時，舊的點移動少於這段距離就當手掌
+  var pending = null;     // { id, pts, len, activeLen, timer }
+
+  function startStroke(id, pts, t) {
+    pushHistory();
+    var stroke = {
+      color: colorKey,
+      size: SIZES[sizeIndex],
+      pressure: false,
+      points: pts
+    };
+    strokes.push(stroke);
+    var last = pts[pts.length - 1];
+    active = { id: id, stroke: stroke,
+               x0: pts[0].x, y0: pts[0].y, px: last.x, py: last.y, moved: 0, lastMove: t };
+    drawStroke(stroke);
+  }
+
+  function decide(newWins) {
+    if (!pending) return;
+    var p = pending;
+    pending = null;
+    clearTimeout(p.timer);
+    if (newWins && tool !== "eraser") {
+      if (active) dropActiveAsPalm();
+      startStroke(p.id, p.pts, performance.now());
+      statusEl.textContent = "上次接觸：觸控（前一個點是手掌，已刪掉）";
+    } else if (newWins) {
+      if (active) dropActiveAsPalm();
+    } else {
+      palmIds[p.id] = true;
+      statusEl.textContent = "上次接觸：觸控（當成手掌，不畫）";
+    }
+  }
+
+  function maybeDecide() {
+    if (pending.len >= DECIDE_PX || pending.activeLen >= DECIDE_PX) {
+      decide(pending.len > pending.activeLen);
+    }
   }
   function pointFrom(e) {
     var r = canvas.getBoundingClientRect();
@@ -484,10 +521,10 @@
     var kind = e.pointerType === "pen" ? "筆" : e.pointerType === "mouse" ? "滑鼠" : "觸控";
     var d = diagPoints[e.pointerId];
     if (word === "按下") {
-      d = diagPoints[e.pointerId] = { x: pt.x, y: pt.y, n: diagNext++ };
+      d = diagPoints[e.pointerId] = { x: pt.x, y: pt.y, n: diagNext++, len: 0, t0: e.timeStamp };
       if (diagNext > 99) diagNext = 1;
     }
-    if (d) { d.x = pt.x; d.y = pt.y; }
+    if (d) { d.len += Math.abs(pt.x - d.x) + Math.abs(pt.y - d.y); d.x = pt.x; d.y = pt.y; }
     if (word === "移動") { diagRender(); return; }
     var n = d ? d.n : "?";
     if (word === "放開" || word === "被系統取消") delete diagPoints[e.pointerId];
@@ -495,8 +532,9 @@
     var count = Object.keys(diagPoints).length;
     if (count > diagMaxTouches) diagMaxTouches = count;
     var t = ((e.timeStamp - diagStart) / 1000).toFixed(1);
-    diagLog.unshift(t + "秒　" + n + "號　" + word + "　" + kind +
-      "　大小 " + Math.round(e.width || 0) + "×" + Math.round(e.height || 0));
+    var extra = (word === "按下" || !d) ? "" :
+      "　移動 " + Math.round(d.len) + " px，" + ((e.timeStamp - d.t0) / 1000).toFixed(1) + " 秒";
+    diagLog.unshift(t + "秒　" + n + "號　" + word + "　" + kind + extra);
     if (diagLog.length > 10) diagLog.pop();
     diagRender();
   }
@@ -523,14 +561,18 @@
     if (reason) { palmIds[e.pointerId] = true; return; }
 
     if (active) {
-      // 已經有一筆在畫：比較誰比較像筆
-      if (e.pointerType === "touch" && activeIsStill(e.timeStamp)) {
-        dropActiveAsPalm();
-        showStatus(e, "前一個點是手掌，已刪掉");
-      } else {
+      // 已經有一筆在畫：先記下新的點，等一下看誰動得多
+      if (e.pointerType !== "touch" || pending) {
         palmIds[e.pointerId] = true;
         return;
       }
+      try { canvas.setPointerCapture(e.pointerId); } catch (err) {}
+      pending = { id: e.pointerId, pts: [pt], len: 0, activeLen: 0, timer: 0 };
+      pending.timer = setTimeout(function () {
+        // 時間到還分不出來：舊的點沒在動就是手掌（例如手掌放著，筆點一下）
+        if (pending) decide(pending.activeLen < STILL_PX);
+      }, DECIDE_MS);
+      return;
     }
 
     try { canvas.setPointerCapture(e.pointerId); } catch (err) {}
@@ -553,15 +595,44 @@
     drawStroke(stroke);
   });
 
+  function pathLen(events, from) {
+    var len = 0, prev = from;
+    for (var i = 0; i < events.length; i++) {
+      var pt = pointFrom(events[i]);
+      len += Math.abs(pt.x - prev.x) + Math.abs(pt.y - prev.y);
+      prev = pt;
+    }
+    return { len: len, last: prev };
+  }
+
   canvas.addEventListener("pointermove", function (e) {
     if (diag) { if (diagPoints[e.pointerId]) diagEvent(e, "移動"); return; }
+    var evs = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
+    if (!evs.length) evs = [e];
+    if (pending && e.pointerId === pending.id) {
+      e.preventDefault();
+      for (var k = 0; k < evs.length; k++) {
+        var q = pointFrom(evs[k]);
+        var lp = pending.pts[pending.pts.length - 1];
+        pending.len += Math.abs(q.x - lp.x) + Math.abs(q.y - lp.y);
+        pending.pts.push(q);
+      }
+      maybeDecide();
+      return;
+    }
     if (!active || active.id !== e.pointerId) return;
+    if (pending) {
+      var lastPt = active.stroke.points[active.stroke.points.length - 1];
+      pending.activeLen += pathLen(evs, lastPt).len;
+    }
     e.preventDefault();
     if (tooBig(e)) {
       showStatus(e, "面積變大，這筆當手掌刪掉");
       dropActiveAsPalm();
       return;
     }
+    if (pending) maybeDecide();
+    if (!active || active.id !== e.pointerId) return;
     var events = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
     if (!events.length) events = [e];
     for (var i = 0; i < events.length; i++) {
@@ -584,6 +655,21 @@
 
   function endPointer(e) {
     if (diag) { diagEvent(e, e.type === "pointercancel" ? "被系統取消" : "放開"); return; }
+    if (pending && e.pointerId === pending.id) {
+      // 新的點很快就離開：多半是筆點了一下，或寫了很短的一筆
+      decide(e.type !== "pointercancel" &&
+             (pending.len > pending.activeLen || pending.activeLen < STILL_PX));
+    } else if (pending && active && e.pointerId === active.id) {
+      // 舊的點先離開：新的點動得比較多，舊的就是手掌；不然舊的是筆，已經寫完
+      if (pending.len > pending.activeLen || e.type === "pointercancel") {
+        decide(true);
+      } else {
+        active = null;
+        decide(false);
+      }
+      saveStrokes();
+      return;
+    }
     delete palmIds[e.pointerId];
     if (!active || active.id !== e.pointerId) return;
     if (e.type === "pointercancel") {
