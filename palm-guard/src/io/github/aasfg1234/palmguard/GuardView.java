@@ -155,6 +155,7 @@ final class GuardView extends View {
 
     @Override
     public boolean onTouchEvent(MotionEvent ev) {
+        TouchLog.event(ev, dp);
         if (floating()) {
             onFloatingTouch(ev);
         } else {
@@ -217,6 +218,7 @@ final class GuardView extends View {
             dx = pendingDx;
             dy = pendingDy;
         }
+        TouchLog.followed();
         listener.onMove(dx, dy);
     }
 

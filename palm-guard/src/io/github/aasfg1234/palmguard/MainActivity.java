@@ -1,6 +1,8 @@
 package io.github.aasfg1234.palmguard;
 
 import android.app.Activity;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Typeface;
@@ -42,6 +44,7 @@ public final class MainActivity extends Activity {
     private TextView heightLabel;
     private SeekBar heightBar;
     private Button centerButton;
+    private TextView logView;
 
     private static final String[] SHAPES = {
         Prefs.SHAPE_BAR, Prefs.SHAPE_CIRCLE, Prefs.SHAPE_OVAL, Prefs.SHAPE_RECT
@@ -169,6 +172,28 @@ public final class MainActivity extends Activity {
             }
         });
 
+        heading("觸控紀錄");
+        hintText("開啟擋板後，把手掌放到擋板上移動，再回到這一頁看紀錄。"
+                + "紀錄會寫出擋板收到了什麼，例如按下、移動、被取消。");
+        button("清除紀錄", new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                TouchLog.clear();
+                refreshUi();
+            }
+        });
+        button("複製紀錄", new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                ClipboardManager cm = getSystemService(ClipboardManager.class);
+                cm.setPrimaryClip(ClipData.newPlainText("手掌擋板觸控紀錄", TouchLog.text()));
+                Toast.makeText(MainActivity.this, "已複製，可以貼到聊天視窗", Toast.LENGTH_SHORT).show();
+            }
+        });
+        logView = text("", 13);
+        logView.setTypeface(Typeface.MONOSPACE);
+        logView.setTextIsSelectable(true);
+
         heading("全自動擋手掌（測試中）");
         hintText("先裝好 Shizuku 並啟動，再用這一頁檢查你的平板能不能做到全自動。");
         button("打開檢查頁", new View.OnClickListener() {
@@ -220,6 +245,8 @@ public final class MainActivity extends Activity {
 
         visibleButton.setEnabled(running);
         visibleButton.setText(running && !visible ? "顯示擋板" : "暫時隱藏擋板");
+        logView.setText(TouchLog.text());
+
         boolean floating = Prefs.floating(this);
         boolean locked = Prefs.locked(this);
         lockButton.setText(floating
