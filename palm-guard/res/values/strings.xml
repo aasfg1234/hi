@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">手掌擋板</string>
+    <color name="ic_launcher_bg">#2F6FDB</color>
+
+    <!-- 跟著系統深淺色，不要上方標題列（畫面裡已經有大標題） -->
+    <style name="AppTheme" parent="@android:style/Theme.DeviceDefault.DayNight">
+        <item name="android:windowActionBar">false</item>
+        <item name="android:windowNoTitle">true</item>
+    </style>
+</resources>
