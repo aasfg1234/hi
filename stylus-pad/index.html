@@ -45,6 +45,7 @@
     --warn: #ff7b7b;
   }
 
+  [hidden] { display: none !important; }
   html, body { height: 100%; }
   body {
     background: var(--paper);
@@ -132,6 +133,21 @@
     pointer-events: none;
   }
 
+  .diag {
+    position: absolute; left: 16px; top: 32px;
+    width: min(420px, calc(100% - 32px));
+    margin: 0;
+    padding: 10px 12px;
+    font: 13px/1.5 ui-monospace, "Noto Sans Mono CJK TC", monospace;
+    color: var(--ink);
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    white-space: pre-wrap;
+    pointer-events: none;
+    opacity: 0.94;
+  }
+
   .panel {
     position: absolute; right: 16px; top: 12px;
     width: min(360px, calc(100% - 32px));
@@ -170,6 +186,7 @@
     <div class="group">
       <button id="undo">上一步</button>
       <button id="clear" class="warn">清空</button>
+      <button id="diag-btn" aria-pressed="false">檢測</button>
       <button id="settings-btn" aria-pressed="false">防手掌設定</button>
     </div>
   </div>
@@ -177,6 +194,7 @@
   <div class="board" id="board">
     <canvas id="pad"></canvas>
     <div class="status" id="status">等你下筆</div>
+    <pre class="diag" id="diag" hidden></pre>
 
     <div class="guard" id="guard">
       <div class="guard-handle" id="guard-handle">拖我調整手掌區</div>
@@ -343,7 +361,7 @@
   // ---------- palm guard ----------
   function guardTop() { return H * (1 - settings.guardRatio); }
   function layoutGuard() {
-    guardEl.hidden = !settings.guardOn;
+    guardEl.hidden = diag || !settings.guardOn;
     guardEl.style.height = (settings.guardRatio * 100) + "%";
   }
   function inGuard(y) { return settings.guardOn && y >= guardTop(); }
@@ -428,9 +446,82 @@
     if (strokes.length !== before) redraw();
   }
 
+  // ---------- 檢測模式：不畫線，只顯示每個接觸點和系統送來的事件 ----------
+  var diag = false;
+  var diagEl = document.getElementById("diag");
+  var diagBtn = document.getElementById("diag-btn");
+  var diagPoints = {};   // pointerId -> {x, y, n}
+  var diagLog = [];
+  var diagCancels = 0;
+  var diagMaxTouches = 0;
+  var diagNext = 1;
+  var diagStart = 0;
+
+  function diagText() {
+    var ids = Object.keys(diagPoints);
+    var lines = [
+      "檢測模式（不會畫線）",
+      "現在碰到：" + ids.length + " 點　最多同時：" + diagMaxTouches + " 點",
+      "被系統取消：" + diagCancels + " 次",
+      "────────────"
+    ];
+    return lines.concat(diagLog).join("\n");
+  }
+  function diagRender() {
+    diagEl.textContent = diagText();
+    redraw();
+    ctx.lineWidth = 2;
+    ctx.font = "bold 16px system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    for (var id in diagPoints) {
+      var d = diagPoints[id];
+      ctx.strokeStyle = cssVar("--accent");
+      ctx.beginPath();
+      ctx.arc(d.x, d.y, 28, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.fillStyle = cssVar("--accent");
+      ctx.fillText(String(d.n), d.x, d.y);
+    }
+  }
+  function diagEvent(e, word) {
+    var pt = pointFrom(e);
+    var kind = e.pointerType === "pen" ? "筆" : e.pointerType === "mouse" ? "滑鼠" : "觸控";
+    var d = diagPoints[e.pointerId];
+    if (word === "按下") {
+      d = diagPoints[e.pointerId] = { x: pt.x, y: pt.y, n: diagNext++ };
+      if (diagNext > 99) diagNext = 1;
+    }
+    if (d) { d.x = pt.x; d.y = pt.y; }
+    if (word === "移動") { diagRender(); return; }
+    var n = d ? d.n : "?";
+    if (word === "放開" || word === "被系統取消") delete diagPoints[e.pointerId];
+    if (word === "被系統取消") diagCancels++;
+    var count = Object.keys(diagPoints).length;
+    if (count > diagMaxTouches) diagMaxTouches = count;
+    var t = ((e.timeStamp - diagStart) / 1000).toFixed(1);
+    diagLog.unshift(t + "秒　" + n + "號　" + word + "　" + kind +
+      "　大小 " + Math.round(e.width || 0) + "×" + Math.round(e.height || 0));
+    if (diagLog.length > 10) diagLog.pop();
+    diagRender();
+  }
+  function setDiag(on) {
+    diag = on;
+    diagBtn.setAttribute("aria-pressed", on ? "true" : "false");
+    diagEl.hidden = !on;
+    guardEl.hidden = on || !settings.guardOn;
+    diagPoints = {}; diagLog = []; diagCancels = 0; diagMaxTouches = 0; diagNext = 1;
+    diagStart = performance.now();
+    active = null;
+    palmIds = {};
+    if (on) diagRender(); else redraw();
+  }
+  diagBtn.addEventListener("click", function () { setDiag(!diag); });
+
   canvas.addEventListener("pointerdown", function (e) {
     e.preventDefault();
     if (!panel.hidden) { closePanel(); return; }
+    if (diag) { try { canvas.setPointerCapture(e.pointerId); } catch (err) {} diagEvent(e, "按下"); return; }
     var pt = pointFrom(e);
     var reason = shouldIgnore(e, pt);
     showStatus(e, reason);
@@ -467,6 +558,7 @@
   });
 
   canvas.addEventListener("pointermove", function (e) {
+    if (diag) { if (diagPoints[e.pointerId]) diagEvent(e, "移動"); return; }
     if (!active || active.id !== e.pointerId) return;
     e.preventDefault();
     if (tooBig(e)) {
@@ -488,8 +580,15 @@
   });
 
   function endPointer(e) {
+    if (diag) { diagEvent(e, e.type === "pointercancel" ? "被系統取消" : "放開"); return; }
     delete palmIds[e.pointerId];
     if (!active || active.id !== e.pointerId) return;
+    if (e.type === "pointercancel") {
+      // 系統取消的筆畫多半是誤觸，整筆拿掉
+      dropActiveAsPalm();
+      saveStrokes();
+      return;
+    }
     active = null;
     saveStrokes();
   }
