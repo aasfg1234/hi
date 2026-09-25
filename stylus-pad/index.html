@@ -204,14 +204,7 @@
     <div class="panel" id="panel" hidden>
       <h2>防手掌設定</h2>
 
-      <div class="field">
-        <span class="name">你用哪隻手寫字？</span>
-        <div class="row">
-          <button id="hand-right" aria-pressed="true">右手</button>
-          <button id="hand-left" aria-pressed="false">左手</button>
-        </div>
-        <p>同時碰到兩個點時，靠近筆尖方向的那個當筆，另一個當手掌丟掉。</p>
-      </div>
+      <p>同時碰到兩個點時，一直不動的那個當手掌，會動的那個當筆。</p>
 
       <div class="field">
         <span class="name">手掌區</span>
@@ -395,9 +388,11 @@
   function tooBig(e) {
     return e.pointerType === "touch" && contactSize(e) > settings.sizeLimit;
   }
-  // 越小越像筆：右手寫字時，筆在手掌的左上方
-  function penScore(x, y) {
-    return settings.hand === "right" ? x + y : -x + y;
+  // 手掌放著幾乎不動；筆會一直動。現在這筆如果沒在動，就可能是手掌
+  var STILL_PX = 12;
+  var STILL_MS = 250;
+  function activeIsStill(now) {
+    return active.moved < STILL_PX || now - active.lastMove > STILL_MS;
   }
   function pointFrom(e) {
     var r = canvas.getBoundingClientRect();
@@ -529,8 +524,7 @@
 
     if (active) {
       // 已經有一筆在畫：比較誰比較像筆
-      var first = active.stroke.points[0];
-      if (penScore(pt.x, pt.y) < penScore(first.x, first.y) && e.pointerType === "touch") {
+      if (e.pointerType === "touch" && activeIsStill(e.timeStamp)) {
         dropActiveAsPalm();
         showStatus(e, "前一個點是手掌，已刪掉");
       } else {
@@ -542,7 +536,8 @@
     try { canvas.setPointerCapture(e.pointerId); } catch (err) {}
     pushHistory();
     if (tool === "eraser") {
-      active = { id: e.pointerId, stroke: { points: [pt] }, erasing: true };
+      active = { id: e.pointerId, stroke: { points: [pt] }, erasing: true,
+                 x0: pt.x, y0: pt.y, px: pt.x, py: pt.y, moved: 0, lastMove: e.timeStamp };
       eraseAt(pt);
       return;
     }
@@ -553,7 +548,8 @@
       points: [pt]
     };
     strokes.push(stroke);
-    active = { id: e.pointerId, stroke: stroke };
+    active = { id: e.pointerId, stroke: stroke,
+               x0: pt.x, y0: pt.y, px: pt.x, py: pt.y, moved: 0, lastMove: e.timeStamp };
     drawStroke(stroke);
   });
 
@@ -570,6 +566,13 @@
     if (!events.length) events = [e];
     for (var i = 0; i < events.length; i++) {
       var pt = pointFrom(events[i]);
+      var dist = Math.abs(pt.x - active.x0) + Math.abs(pt.y - active.y0);
+      if (dist > active.moved) active.moved = dist;
+      // 手掌會微微晃；移動超過 3 px 才算真的在動
+      if (Math.abs(pt.x - active.px) + Math.abs(pt.y - active.py) > 3) {
+        active.px = pt.x; active.py = pt.y;
+        active.lastMove = events[i].timeStamp;
+      }
       if (active.erasing) { eraseAt(pt); continue; }
       var pts = active.stroke.points;
       var last = pts[pts.length - 1];
@@ -677,7 +680,6 @@
   document.getElementById("close-panel").addEventListener("click", closePanel);
 
   function syncSettingsUI() {
-    setPressed(["hand-right", "hand-left"], settings.hand === "right" ? "hand-right" : "hand-left");
     setPressed(["guard-on", "guard-off"], settings.guardOn ? "guard-on" : "guard-off");
     setPressed(["pen-only-auto", "pen-only-off"], settings.penOnly === "auto" ? "pen-only-auto" : "pen-only-off");
     document.getElementById("size-limit").value = settings.sizeLimit;
@@ -687,8 +689,6 @@
   function bind(id, fn) {
     document.getElementById(id).addEventListener("click", function () { fn(); saveSettings(); syncSettingsUI(); });
   }
-  bind("hand-right", function () { settings.hand = "right"; });
-  bind("hand-left", function () { settings.hand = "left"; });
   bind("guard-on", function () { settings.guardOn = true; });
   bind("guard-off", function () { settings.guardOn = false; });
   bind("pen-only-auto", function () { settings.penOnly = "auto"; });
