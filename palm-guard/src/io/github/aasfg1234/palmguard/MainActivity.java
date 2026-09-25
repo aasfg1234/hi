@@ -125,6 +125,15 @@ public final class MainActivity extends Activity {
             }
         });
 
+        heading("全自動擋手掌（測試中）");
+        hintText("先裝好 Shizuku 並啟動，再用這一頁檢查你的平板能不能做到全自動。");
+        button("打開檢查頁", new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                startActivity(new Intent(MainActivity.this, CheckActivity.class));
+            }
+        });
+
         heading("怎麼用");
         hintText("1. 拖擋板上緣的藍色把手，可以調整擋板高度。");
         hintText("2. 調好以後按「鎖定把手」，手掌就不會不小心拖到把手。");

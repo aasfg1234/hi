@@ -10,6 +10,15 @@
 2. 下載完按「開啟」，照畫面允許安裝。
 3. 打開「手掌擋板」，照 App 裡的第 1 步、第 2 步做。
 
+## 全自動擋手掌的檢查頁（第 2 版）
+
+App 首頁的「打開檢查頁」會透過 Shizuku 做兩項檢查：
+
+1. 權限和觸控晶片：查能不能做出虛擬的筆（`/dev/uhid`），以及觸控晶片回報哪些資料（`getevent -lp`）。
+2. 筆會不會擋掉手指：手指在框裡畫圈時，用 `input stylus motionevent` 假裝有筆碰螢幕，看安卓會不會把手指擋掉。
+
+需要先安裝並啟動 Shizuku。App 自己寫了和 Shizuku 連線的程式（`ShizukuClient`、`ShizukuBinderProvider`），沒有用 Shizuku 的 api 套件，因為那個套件用了 dx 轉不了的 lambda。
+
 ## 限制
 
 - 擋板那塊區域完全不能點。要點下面的東西，先把擋板隱藏或拖低。
